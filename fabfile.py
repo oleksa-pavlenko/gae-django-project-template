@@ -1,6 +1,6 @@
 from fabric.api import local
 
-from settings import GAE_APP_ID
+from project.settings import GAE_APP_ID
 
 
 def db_download():

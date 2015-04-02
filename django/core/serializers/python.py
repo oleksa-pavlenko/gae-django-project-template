@@ -5,6 +5,7 @@ other serializers.
 """
 from __future__ import unicode_literals
 
+from django.apps import apps
 from django.conf import settings
 from django.core.serializers import base
 from django.db import models, DEFAULT_DB_ALIAS
@@ -34,11 +35,14 @@ class Serializer(base.Serializer):
         self._current = None
 
     def get_dump_object(self, obj):
-        return {
-            "pk": smart_text(obj._get_pk_val(), strings_only=True),
+        data = {
             "model": smart_text(obj._meta),
-            "fields": self._current
+            "fields": self._current,
         }
+        if not self.use_natural_primary_keys or not hasattr(obj, 'natural_key'):
+            data["pk"] = smart_text(obj._get_pk_val(), strings_only=True)
+
+        return data
 
     def handle_field(self, obj, field):
         value = field._get_val_from_obj(obj)
@@ -51,7 +55,7 @@ class Serializer(base.Serializer):
             self._current[field.name] = field.value_to_string(obj)
 
     def handle_fk_field(self, obj, field):
-        if self.use_natural_keys and hasattr(field.rel.to, 'natural_key'):
+        if self.use_natural_foreign_keys and hasattr(field.rel.to, 'natural_key'):
             related = getattr(obj, field.name)
             if related:
                 value = related.natural_key()
@@ -63,23 +67,11 @@ class Serializer(base.Serializer):
 
     def handle_m2m_field(self, obj, field):
         if field.rel.through._meta.auto_created:
-            if self.use_natural_keys and hasattr(field.rel.to, 'natural_key'):
+            if self.use_natural_foreign_keys and hasattr(field.rel.to, 'natural_key'):
                 m2m_value = lambda value: value.natural_key()
-                self._current[field.name] = [m2m_value(related)
-                        for related in getattr(obj, field.name).iterator()]
-            elif field.rel.get_related_field().primary_key:
-                m2m_value = lambda value: smart_unicode(
-                    getattr(value, related_query.target_field_name + '_id'),
-                    strings_only=True)
-                related_query = getattr(obj, field.name)
-                filters = {related_query.source_field_name: obj._get_pk_val()}
-                query = field.rel.through.objects.filter(**filters)
-                self._current[field.name] = sorted((m2m_value(m2m_entity)
-                                                    for m2m_entity in query),
-                                                   reverse=True)
             else:
                 m2m_value = lambda value: smart_text(value._get_pk_val(), strings_only=True)
-                self._current[field.name] = [m2m_value(related)
+            self._current[field.name] = [m2m_value(related)
                                for related in getattr(obj, field.name).iterator()]
 
     def getvalue(self):
@@ -96,11 +88,12 @@ def Deserializer(object_list, **options):
     db = options.pop('using', DEFAULT_DB_ALIAS)
     ignore = options.pop('ignorenonexistent', False)
 
-    models.get_apps()
     for d in object_list:
         # Look up the model and starting build a dict of data for it.
         Model = _get_model(d["model"])
-        data = {Model._meta.pk.attname: Model._meta.pk.to_python(d.get("pk", None))}
+        data = {}
+        if 'pk' in d:
+            data[Model._meta.pk.attname] = Model._meta.pk.to_python(d.get("pk", None))
         m2m_data = {}
         model_fields = Model._meta.get_all_field_names()
 
@@ -151,16 +144,15 @@ def Deserializer(object_list, **options):
             else:
                 data[field.name] = field.to_python(field_value)
 
-        yield base.DeserializedObject(Model(**data), m2m_data)
+        obj = base.build_instance(Model, data, db)
+        yield base.DeserializedObject(obj, m2m_data)
+
 
 def _get_model(model_identifier):
     """
     Helper to look up a model from an "app_label.model_name" string.
     """
     try:
-        Model = models.get_model(*model_identifier.split("."))
-    except TypeError:
-        Model = None
-    if Model is None:
+        return apps.get_model(model_identifier)
+    except (LookupError, TypeError):
         raise base.DeserializationError("Invalid model identifier: '%s'" % model_identifier)
-    return Model
