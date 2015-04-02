@@ -155,3 +155,5 @@ LOGGING = {
         },
     }
 }
+
+GAE_APP_ID = 'app_id'
