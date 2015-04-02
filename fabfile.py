@@ -4,7 +4,10 @@ from project.settings import GAE_APP_ID
 
 
 def db_download():
-    local('rm data.dat')
+    try:
+        local('rm data.dat')
+    except:
+        pass
     local('appcfg.py -A s~%s --url=http://%s.appspot.com/_ah/remote_api/ '
           '--filename data.dat download_data .' % (GAE_APP_ID, GAE_APP_ID))
 
